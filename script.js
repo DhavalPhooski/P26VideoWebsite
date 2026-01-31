@@ -1,21 +1,14 @@
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const video = document.getElementById("video");
+const gyroBtn = document.getElementById("gyroBtn");
 
 let DPR = window.devicePixelRatio || 1;
 const SCALE = 0.8;
 
-function resize() {
-  canvas.width = innerWidth * SCALE * DPR;
-  canvas.height = innerHeight * SCALE * DPR;
-  ctx.imageSmoothingEnabled = false;
-}
-resize();
-addEventListener("resize", resize);
-
-let inputX = 0.5;
-let gyroX = 0;
-let targetGyro = 0;
+let inputX = 0.5;      // mouse/touch input
+let gyroX = 0;         // smoothed gyro
+let targetGyro = 0;    // raw gyro
 let gyroEnabled = false;
 
 let targetTime = 0;
@@ -23,6 +16,15 @@ let currentTime = 0;
 let dirty = true;
 
 const STEPS = 24;
+
+// --- Canvas setup ---
+function resize() {
+  canvas.width = innerWidth * SCALE * DPR;
+  canvas.height = innerHeight * SCALE * DPR;
+  ctx.imageSmoothingEnabled = false;
+}
+resize();
+window.addEventListener("resize", resize);
 
 // --- Mouse ---
 window.addEventListener("mousemove", e => {
@@ -36,11 +38,9 @@ window.addEventListener("touchmove", e => {
   dirty = true;
 }, { passive: true });
 
-// --- Gyro button (iOS safe) ---
-const gyroBtn = document.getElementById("gyroBtn");
+// --- Gyro button ---
 gyroBtn.addEventListener("click", async () => {
   if (typeof DeviceOrientationEvent?.requestPermission === "function") {
-    // iOS
     try {
       const res = await DeviceOrientationEvent.requestPermission();
       if (res === "granted") enableGyro();
@@ -48,7 +48,6 @@ gyroBtn.addEventListener("click", async () => {
       console.warn("Gyro permission denied", err);
     }
   } else {
-    // Android / desktop
     enableGyro();
   }
   gyroBtn.style.display = "none";
@@ -56,24 +55,27 @@ gyroBtn.addEventListener("click", async () => {
 
 function enableGyro() {
   gyroEnabled = true;
-
   window.addEventListener("deviceorientation", e => {
     const raw = e.gamma || 0; // left/right tilt
-    targetGyro = Math.max(-30, Math.min(30, raw)) / 60; // clamp to -0.5 → 0.5
+    targetGyro = Math.max(-30, Math.min(30, raw)) / 60; // clamp -0.5 → 0.5
     dirty = true;
   });
 }
 
 // --- Video warmup ---
-video.addEventListener("loadedmetadata", () => {
-  video.currentTime = 0.001;
-  const p = video.play();
-  if (p) p.then(() => video.pause()).catch(() => {});
+video.addEventListener("loadeddata", () => {
+  // Start video muted so canvas can draw frames
+  video.play().catch(() => {});
+  dirty = true;
 });
 
 // --- Draw loop ---
 function draw() {
-  if (!dirty) return;
+  // Only run if video has loaded duration
+  if (!video.duration || video.duration === Infinity || isNaN(video.duration)) {
+    requestAnimationFrame(draw);
+    return;
+  }
 
   // Smooth gyro
   gyroX += (targetGyro - gyroX) * 0.08;
@@ -94,14 +96,12 @@ function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Micro parallax shift
-  const shiftX = ((blendedX - 0.5) * 30 + gyroX * 40) * DPR;
+  const maxShift = 50 * DPR;
+  const shiftX = (blendedX - 0.5) * maxShift;
   ctx.drawImage(video, shiftX, 0, canvas.width, canvas.height);
 
-  dirty = false;
+  requestAnimationFrame(draw);
 }
 
-function loop() {
-  draw();
-  requestAnimationFrame(loop);
-}
-loop();
+
+draw();
