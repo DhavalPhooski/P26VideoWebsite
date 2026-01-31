@@ -20,6 +20,22 @@
     video {
       display: none;
     }
+
+    /* iOS Gyro button */
+    #gyroBtn {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      font-size: 16px;
+      background: rgba(255,255,255,0.2);
+      color: white;
+      border: 1px solid white;
+      border-radius: 6px;
+      cursor: pointer;
+      z-index: 1000;
+    }
   </style>
 </head>
 <body>
@@ -33,6 +49,8 @@
   playsinline
   preload="auto">
 </video>
+
+<button id="gyroBtn">Enable Gyro</button>
 
 <script src="script.js"></script>
 </body>
