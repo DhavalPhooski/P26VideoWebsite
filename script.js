@@ -6,14 +6,12 @@ const startBtn = document.getElementById("startBtn");
 let DPR = window.devicePixelRatio || 1;
 const SCALE = 0.8;
 
-let inputX = 0.5;      // mouse/touch input
-let gyroX = 0;         // smoothed gyro
-let targetGyro = 0;    // raw gyro
+let inputX = 0.5;      // fallback mouse/touch input
+let gyroX = 0;         // smoothed gyro value (-0.5 → 0.5)
+let targetGyro = 0;
 let gyroEnabled = false;
 
-let targetTime = 0;
 let currentTime = 0;
-
 const STEPS = 24;
 
 // --- Canvas setup ---
@@ -39,8 +37,9 @@ window.addEventListener("touchmove", e => {
 function enableGyro() {
   gyroEnabled = true;
   window.addEventListener("deviceorientation", e => {
-    const raw = e.gamma || 0; // left/right tilt
-    targetGyro = Math.max(-30, Math.min(30, raw)) / 60; // clamp -0.5 → 0.5
+    const raw = e.gamma || 0; // left/right tilt in degrees
+    // map gamma [-30,30] → [-0.5, 0.5]
+    targetGyro = Math.max(-30, Math.min(30, raw)) / 60;
   });
 }
 
@@ -72,7 +71,7 @@ startBtn.addEventListener("click", async () => {
 
 // --- Draw loop ---
 function draw() {
-  if (!video.duration || video.duration === Infinity || isNaN(video.duration)) {
+  if (!video.duration || isNaN(video.duration)) {
     requestAnimationFrame(draw);
     return;
   }
@@ -80,23 +79,21 @@ function draw() {
   // Smooth gyro
   gyroX += (targetGyro - gyroX) * 0.08;
 
-  // Blend input
-  let blendedX;
+  // Determine frame input (0 → start, 1 → end)
+  let frameInput;
   if (gyroEnabled) {
-    // Map gyroX (-0.5 → +0.5) to 0 → 1
-    blendedX = 0.5 + gyroX; // now -0.5 → 0, 0 → 0.5, +0.5 → 1
-    blendedX = Math.max(0, Math.min(1, blendedX)); // clamp
+    frameInput = 0.5 + gyroX; // -0.5 → 0, 0 → 0.5, +0.5 → 1
   } else {
-    blendedX = inputX; // mouse/touch fallback
+    frameInput = inputX; // mouse/touch fallback
   }
+  frameInput = Math.max(0, Math.min(1, frameInput)); // clamp
 
-  // --- Map to quantized video time ---
-  const q = Math.round(blendedX * STEPS) / STEPS;
-  targetTime = q * video.duration;
+  // Quantize to STEPS for discrete frames if desired
+  const q = Math.round(frameInput * STEPS) / STEPS;
+  const targetTime = q * video.duration;
 
-  // Temporal easing
+  // Smooth temporal easing
   currentTime += (targetTime - currentTime) * 0.12;
-  currentTime = Math.max(0, Math.min(video.duration, currentTime));
   video.currentTime = currentTime;
 
   // Clear canvas
@@ -104,9 +101,8 @@ function draw() {
 
   // Micro parallax shift (optional)
   const maxShift = 50 * DPR;
-  const shiftX = (blendedX - 0.5) * maxShift;
+  const shiftX = (frameInput - 0.5) * maxShift;
   ctx.drawImage(video, shiftX, 0, canvas.width, canvas.height);
 
   requestAnimationFrame(draw);
 }
-
