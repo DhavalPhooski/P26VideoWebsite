@@ -127,7 +127,7 @@
             height: 100%;
             background: #007AFF;
             width: 0%;
-            transition: width 0.1s linear;
+            transition: none; /* Remove transition for smoother updates */
         }
     </style>
 </head>
@@ -162,10 +162,23 @@
         let gyroActive = false;
         let videoDuration = 0;
         let middleTime = 0;
-        let baseGamma = null; // Store initial tilt angle
+        let baseGamma = null;
         
-        // Configurable sensitivity (degrees of tilt for full video range)
-        const TILT_RANGE = 45; // ±45 degrees from center
+        // Optimized for 1-second video - ultra smooth parameters
+        const TILT_RANGE = 25; // ±25 degrees (very sensitive for fine control)
+        
+        // Ultra-smooth interpolation
+        let currentTime = 0;
+        let targetTime = 0;
+        const SMOOTHING = 0.25; // 0.2-0.4 for butter smooth (higher = more responsive)
+        
+        // Gyro smoothing with multiple samples
+        let gyroBuffer = [];
+        const GYRO_BUFFER_SIZE = 5; // Average more samples for ultra-smooth input
+        
+        // High-frequency update loop
+        let lastFrameTime = 0;
+        let isAnimating = false;
 
         // Show error message
         function showError(message) {
@@ -176,65 +189,95 @@
             }, 5000);
         }
 
-        // Update progress bar
-        function updateProgress() {
-            if (videoDuration > 0) {
-                const progress = (video.currentTime / videoDuration) * 100;
-                progressFill.style.width = progress + '%';
+        // Smooth animation loop (requestAnimationFrame for 60fps)
+        function smoothUpdate(timestamp) {
+            if (!isAnimating) return;
+
+            // Smooth interpolation
+            const diff = targetTime - currentTime;
+            currentTime += diff * SMOOTHING;
+
+            // Update video only if change is significant (avoid micro-jitter)
+            if (Math.abs(video.currentTime - currentTime) > 0.0001) {
+                video.currentTime = currentTime;
             }
+
+            // Update progress bar
+            const progress = (currentTime / videoDuration) * 100;
+            progressFill.style.width = progress + '%';
+
+            requestAnimationFrame(smoothUpdate);
         }
 
-        // Video loaded
+        // Video loaded - critical optimizations
         video.addEventListener('loadedmetadata', () => {
             videoDuration = video.duration;
             middleTime = videoDuration / 2;
+            currentTime = middleTime;
+            targetTime = middleTime;
             video.currentTime = middleTime;
             loadingText.style.display = 'none';
-            console.log('Video loaded. Duration:', videoDuration, 'Middle:', middleTime);
+            
+            console.log('Video duration:', videoDuration + 's');
+            
+            // Force video to fully buffer for smooth scrubbing
+            const bufferVideo = () => {
+                video.play().then(() => {
+                    setTimeout(() => {
+                        video.pause();
+                        video.currentTime = middleTime;
+                        console.log('Video buffered and ready');
+                    }, 100);
+                }).catch(err => {
+                    console.log('Autoplay prevented, will buffer on user interaction');
+                });
+            };
+            
+            // Try to buffer immediately
+            bufferVideo();
         });
 
-        video.addEventListener('timeupdate', updateProgress);
-
-        // Handle gyroscope data
+        // Handle gyroscope with heavy smoothing
         function handleOrientation(event) {
             if (!gyroActive || videoDuration === 0) return;
 
-            // gamma is the left-to-right tilt in degrees (-90 to 90)
             let gamma = event.gamma;
-
-            // Handle device orientation (some phones report differently)
             if (gamma === null) {
-                debugInfo.textContent = 'Gyro data not available';
+                debugInfo.textContent = 'Gyro unavailable';
                 return;
             }
 
-            // Set baseline on first reading
+            // Initialize baseline
             if (baseGamma === null) {
                 baseGamma = gamma;
+                gyroBuffer = Array(GYRO_BUFFER_SIZE).fill(gamma);
             }
 
-            // Calculate relative tilt from starting position
-            let relativeTilt = gamma - baseGamma;
+            // Add to circular buffer
+            gyroBuffer.push(gamma);
+            gyroBuffer.shift();
 
-            // Clamp the tilt to our range
+            // Heavy smoothing: average all samples
+            const smoothedGamma = gyroBuffer.reduce((sum, val) => sum + val, 0) / GYRO_BUFFER_SIZE;
+
+            // Calculate relative tilt
+            let relativeTilt = smoothedGamma - baseGamma;
             relativeTilt = Math.max(-TILT_RANGE, Math.min(TILT_RANGE, relativeTilt));
 
-            // Map tilt to video time
-            // -TILT_RANGE (left) -> 0 (start of video)
-            // 0 (center) -> middleTime
-            // +TILT_RANGE (right) -> videoDuration (end of video)
-            const normalizedTilt = (relativeTilt + TILT_RANGE) / (TILT_RANGE * 2); // 0 to 1
-            const targetTime = normalizedTilt * videoDuration;
+            // Map to video time with high precision
+            const normalized = (relativeTilt + TILT_RANGE) / (TILT_RANGE * 2);
+            targetTime = normalized * videoDuration;
 
-            // Update video position
-            video.currentTime = targetTime;
-
-            // Debug info
-            const direction = relativeTilt < -2 ? '←' : relativeTilt > 2 ? '→' : '•';
-            debugInfo.textContent = `${direction} Tilt: ${relativeTilt.toFixed(1)}° | Frame: ${targetTime.toFixed(2)}s / ${videoDuration.toFixed(2)}s`;
+            // Update debug (in milliseconds for 1-second video)
+            const currentMs = Math.round(currentTime * 1000);
+            const totalMs = Math.round(videoDuration * 1000);
+            const tiltDisplay = relativeTilt.toFixed(1);
+            const direction = relativeTilt < -0.5 ? '◄◄' : relativeTilt > 0.5 ? '►►' : '●';
+            
+            debugInfo.textContent = `${direction} ${tiltDisplay}° | ${currentMs}ms / ${totalMs}ms`;
         }
 
-        // Request gyroscope permission (iOS 13+)
+        // Request gyroscope permission
         async function requestGyroPermission() {
             if (typeof DeviceOrientationEvent !== 'undefined' && 
                 typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -247,51 +290,65 @@
                         return false;
                     }
                 } catch (error) {
-                    showError('Error requesting gyroscope: ' + error.message);
+                    showError('Error: ' + error.message);
                     return false;
                 }
             }
-            // No permission needed (Android, older iOS)
             return true;
         }
 
-        // Start gyroscope control
+        // Start gyroscope
         startButton.addEventListener('click', async () => {
             if (videoDuration === 0) {
-                showError('Please wait for video to load');
+                showError('Wait for video to load');
                 return;
             }
 
             const permitted = await requestGyroPermission();
             
             if (permitted) {
-                window.addEventListener('deviceorientation', handleOrientation, true);
+                // Ensure video is ready
+                if (video.paused) {
+                    await video.play().then(() => video.pause()).catch(() => {});
+                }
+                
+                // Start gyro listening at high frequency
+                window.addEventListener('deviceorientation', handleOrientation);
+                
                 gyroActive = true;
-                baseGamma = null; // Reset baseline
-                startButton.textContent = 'Gyroscope Active ✓';
-                startButton.disabled = true;
-                debugInfo.textContent = 'Move your phone left/right';
+                baseGamma = null;
+                gyroBuffer = [];
+                
+                // Start smooth animation loop
+                isAnimating = true;
+                requestAnimationFrame(smoothUpdate);
                 
                 // Reset to middle
+                currentTime = middleTime;
+                targetTime = middleTime;
                 video.currentTime = middleTime;
+                
+                startButton.textContent = 'Gyroscope Active ✓';
+                startButton.disabled = true;
+                debugInfo.textContent = 'Tilt left/right';
             }
         });
 
-        // Handle video errors
+        // Handle errors
         video.addEventListener('error', (e) => {
             loadingText.style.display = 'none';
-            showError('Error loading video. Make sure parallax.av1.mp4 is in the same folder.');
+            showError('Video error - check file location');
             console.error('Video error:', e);
         });
 
-        // Prevent scrolling on mobile
+        // Prevent scrolling
         document.body.addEventListener('touchmove', (e) => {
             e.preventDefault();
         }, { passive: false });
 
-        // Debug: Check if gyroscope is available
+        // Check gyroscope support
         if (!window.DeviceOrientationEvent) {
-            showError('Gyroscope not supported on this device');
+            showError('Gyroscope not supported');
         }
     </script>
 </body>
