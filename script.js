@@ -1,7 +1,7 @@
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const video = document.getElementById("video");
-const gyroBtn = document.getElementById("gyroBtn");
+const startBtn = document.getElementById("startBtn");
 
 let DPR = window.devicePixelRatio || 1;
 const SCALE = 0.8;
@@ -13,7 +13,6 @@ let gyroEnabled = false;
 
 let targetTime = 0;
 let currentTime = 0;
-let dirty = true;
 
 const STEPS = 24;
 
@@ -29,49 +28,50 @@ window.addEventListener("resize", resize);
 // --- Mouse ---
 window.addEventListener("mousemove", e => {
   inputX = e.clientX / innerWidth;
-  dirty = true;
 });
 
 // --- Touch ---
 window.addEventListener("touchmove", e => {
   inputX = e.touches[0].clientX / innerWidth;
-  dirty = true;
 }, { passive: true });
 
-// --- Gyro button ---
-gyroBtn.addEventListener("click", async () => {
-  if (typeof DeviceOrientationEvent?.requestPermission === "function") {
-    try {
-      const res = await DeviceOrientationEvent.requestPermission();
-      if (res === "granted") enableGyro();
-    } catch (err) {
-      console.warn("Gyro permission denied", err);
-    }
-  } else {
-    enableGyro();
-  }
-  gyroBtn.style.display = "none";
-});
-
+// --- Gyro enable function ---
 function enableGyro() {
   gyroEnabled = true;
   window.addEventListener("deviceorientation", e => {
     const raw = e.gamma || 0; // left/right tilt
     targetGyro = Math.max(-30, Math.min(30, raw)) / 60; // clamp -0.5 → 0.5
-    dirty = true;
   });
 }
 
-// --- Video warmup ---
-video.addEventListener("loadeddata", () => {
-  // Start video muted so canvas can draw frames
-  video.play().catch(() => {});
-  dirty = true;
+// --- Start Experience button ---
+startBtn.addEventListener("click", async () => {
+  startBtn.style.display = "none";
+
+  // Play video (muted + playsinline required for mobile)
+  try {
+    await video.play();
+  } catch(err) {
+    console.warn("Video play failed:", err);
+  }
+
+  // Request gyro permission if needed
+  if (typeof DeviceOrientationEvent?.requestPermission === "function") {
+    try {
+      const res = await DeviceOrientationEvent.requestPermission();
+      if (res === "granted") enableGyro();
+    } catch(err) {
+      console.warn("Gyro permission denied", err);
+    }
+  } else {
+    enableGyro(); // Android / desktop
+  }
+
+  draw(); // start render loop
 });
 
 // --- Draw loop ---
 function draw() {
-  // Only run if video has loaded duration
   if (!video.duration || video.duration === Infinity || isNaN(video.duration)) {
     requestAnimationFrame(draw);
     return;
@@ -102,6 +102,3 @@ function draw() {
 
   requestAnimationFrame(draw);
 }
-
-
-draw();
