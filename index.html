@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport"="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Gyroscopic Video Controller</title>
     <style>
         * {
@@ -45,7 +45,7 @@
             bottom: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.7);
+            background: rgba(0, 0, 0, 0.8);
             padding: 15px 20px;
             border-radius: 12px;
             color: white;
@@ -127,7 +127,14 @@
             height: 100%;
             background: #007AFF;
             width: 0%;
-            transition: none; /* Remove transition for smoother updates */
+            transition: none;
+        }
+
+        .speedIndicator {
+            font-size: 14px;
+            margin-top: 8px;
+            font-weight: 600;
+            color: #fff;
         }
     </style>
 </head>
@@ -144,7 +151,8 @@
 
     <div id="controls">
         <button id="startButton">Enable Gyroscope</button>
-        <div class="info">Tilt your phone left/right to control the video</div>
+        <div class="info">Tilt left = rewind | Tilt right = forward</div>
+        <div class="speedIndicator" id="speedIndicator">●</div>
         <div class="progressBar">
             <div class="progressFill" id="progressFill"></div>
         </div>
@@ -158,26 +166,25 @@
         const errorMessage = document.getElementById('errorMessage');
         const loadingText = document.getElementById('loadingText');
         const progressFill = document.getElementById('progressFill');
+        const speedIndicator = document.getElementById('speedIndicator');
 
         let gyroActive = false;
         let videoDuration = 0;
         let middleTime = 0;
         let baseGamma = null;
         
-        // Optimized for 1-second video - ultra smooth parameters
-        const TILT_RANGE = 25; // ±25 degrees (very sensitive for fine control)
-        
-        // Ultra-smooth interpolation
+        // Velocity-based playback
         let currentTime = 0;
-        let targetTime = 0;
-        const SMOOTHING = 0.25; // 0.2-0.4 for butter smooth (higher = more responsive)
+        let playbackSpeed = 0; // pixels/frame to move
         
-        // Gyro smoothing with multiple samples
+        // Sensitivity settings
+        const DEAD_ZONE = 3; // Degrees of tilt before movement starts
+        const MAX_TILT = 30; // Max tilt angle for max speed
+        const MAX_SPEED = 0.02; // Max seconds per frame (higher = faster scrubbing)
+        
+        // Smoothing
         let gyroBuffer = [];
-        const GYRO_BUFFER_SIZE = 5; // Average more samples for ultra-smooth input
-        
-        // High-frequency update loop
-        let lastFrameTime = 0;
+        const GYRO_BUFFER_SIZE = 3;
         let isAnimating = false;
 
         // Show error message
@@ -189,55 +196,68 @@
             }, 5000);
         }
 
-        // Smooth animation loop (requestAnimationFrame for 60fps)
-        function smoothUpdate(timestamp) {
+        // Update speed indicator
+        function updateSpeedIndicator(tilt) {
+            if (Math.abs(tilt) < DEAD_ZONE) {
+                speedIndicator.textContent = '●';
+                speedIndicator.style.color = '#888';
+            } else if (tilt < 0) {
+                const bars = Math.ceil(Math.abs(tilt) / (MAX_TILT / 3));
+                speedIndicator.textContent = '◄'.repeat(Math.min(bars, 3));
+                speedIndicator.style.color = '#FF6B6B';
+            } else {
+                const bars = Math.ceil(tilt / (MAX_TILT / 3));
+                speedIndicator.textContent = '►'.repeat(Math.min(bars, 3));
+                speedIndicator.style.color = '#4CAF50';
+            }
+        }
+
+        // Velocity-based update loop
+        function velocityUpdate() {
             if (!isAnimating) return;
 
-            // Smooth interpolation
-            const diff = targetTime - currentTime;
-            currentTime += diff * SMOOTHING;
+            // Apply velocity to current time
+            currentTime += playbackSpeed;
 
-            // Update video only if change is significant (avoid micro-jitter)
-            if (Math.abs(video.currentTime - currentTime) > 0.0001) {
-                video.currentTime = currentTime;
+            // Clamp to video bounds with bounce
+            if (currentTime < 0) {
+                currentTime = 0;
+                playbackSpeed = 0;
+            } else if (currentTime > videoDuration) {
+                currentTime = videoDuration;
+                playbackSpeed = 0;
             }
+
+            // Update video
+            video.currentTime = currentTime;
 
             // Update progress bar
             const progress = (currentTime / videoDuration) * 100;
             progressFill.style.width = progress + '%';
 
-            requestAnimationFrame(smoothUpdate);
+            requestAnimationFrame(velocityUpdate);
         }
 
-        // Video loaded - critical optimizations
+        // Video loaded
         video.addEventListener('loadedmetadata', () => {
             videoDuration = video.duration;
             middleTime = videoDuration / 2;
             currentTime = middleTime;
-            targetTime = middleTime;
             video.currentTime = middleTime;
             loadingText.style.display = 'none';
             
             console.log('Video duration:', videoDuration + 's');
             
-            // Force video to fully buffer for smooth scrubbing
-            const bufferVideo = () => {
-                video.play().then(() => {
-                    setTimeout(() => {
-                        video.pause();
-                        video.currentTime = middleTime;
-                        console.log('Video buffered and ready');
-                    }, 100);
-                }).catch(err => {
-                    console.log('Autoplay prevented, will buffer on user interaction');
-                });
-            };
-            
-            // Try to buffer immediately
-            bufferVideo();
+            // Preload video
+            video.play().then(() => {
+                setTimeout(() => {
+                    video.pause();
+                    video.currentTime = middleTime;
+                }, 100);
+            }).catch(() => {});
         });
 
-        // Handle gyroscope with heavy smoothing
+        // Handle gyroscope - velocity based
         function handleOrientation(event) {
             if (!gyroActive || videoDuration === 0) return;
 
@@ -250,31 +270,39 @@
             // Initialize baseline
             if (baseGamma === null) {
                 baseGamma = gamma;
-                gyroBuffer = Array(GYRO_BUFFER_SIZE).fill(gamma);
+                gyroBuffer = Array(GYRO_BUFFER_SIZE).fill(0);
             }
 
-            // Add to circular buffer
-            gyroBuffer.push(gamma);
-            gyroBuffer.shift();
-
-            // Heavy smoothing: average all samples
-            const smoothedGamma = gyroBuffer.reduce((sum, val) => sum + val, 0) / GYRO_BUFFER_SIZE;
-
             // Calculate relative tilt
-            let relativeTilt = smoothedGamma - baseGamma;
-            relativeTilt = Math.max(-TILT_RANGE, Math.min(TILT_RANGE, relativeTilt));
+            let relativeTilt = gamma - baseGamma;
 
-            // Map to video time with high precision
-            const normalized = (relativeTilt + TILT_RANGE) / (TILT_RANGE * 2);
-            targetTime = normalized * videoDuration;
+            // Add to buffer for smoothing
+            gyroBuffer.push(relativeTilt);
+            gyroBuffer.shift();
+            const smoothedTilt = gyroBuffer.reduce((sum, val) => sum + val, 0) / GYRO_BUFFER_SIZE;
 
-            // Update debug (in milliseconds for 1-second video)
+            // Apply dead zone
+            let effectiveTilt = smoothedTilt;
+            if (Math.abs(effectiveTilt) < DEAD_ZONE) {
+                effectiveTilt = 0;
+            }
+
+            // Calculate playback speed based on tilt
+            // Normalize tilt to -1 to 1 range
+            const normalizedTilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, effectiveTilt)) / MAX_TILT;
+            
+            // Set playback speed (positive = forward, negative = backward)
+            playbackSpeed = normalizedTilt * MAX_SPEED;
+
+            // Update UI
+            updateSpeedIndicator(smoothedTilt);
+
+            // Debug info
             const currentMs = Math.round(currentTime * 1000);
             const totalMs = Math.round(videoDuration * 1000);
-            const tiltDisplay = relativeTilt.toFixed(1);
-            const direction = relativeTilt < -0.5 ? '◄◄' : relativeTilt > 0.5 ? '►►' : '●';
+            const speedDisplay = (playbackSpeed * 1000).toFixed(1);
             
-            debugInfo.textContent = `${direction} ${tiltDisplay}° | ${currentMs}ms / ${totalMs}ms`;
+            debugInfo.textContent = `Tilt: ${smoothedTilt.toFixed(1)}° | Speed: ${speedDisplay}ms/f | ${currentMs}/${totalMs}ms`;
         }
 
         // Request gyroscope permission
@@ -312,25 +340,25 @@
                     await video.play().then(() => video.pause()).catch(() => {});
                 }
                 
-                // Start gyro listening at high frequency
+                // Start gyro listening
                 window.addEventListener('deviceorientation', handleOrientation);
                 
                 gyroActive = true;
                 baseGamma = null;
                 gyroBuffer = [];
+                playbackSpeed = 0;
                 
-                // Start smooth animation loop
+                // Start velocity update loop
                 isAnimating = true;
-                requestAnimationFrame(smoothUpdate);
+                requestAnimationFrame(velocityUpdate);
                 
                 // Reset to middle
                 currentTime = middleTime;
-                targetTime = middleTime;
                 video.currentTime = middleTime;
                 
                 startButton.textContent = 'Gyroscope Active ✓';
                 startButton.disabled = true;
-                debugInfo.textContent = 'Tilt left/right';
+                debugInfo.textContent = 'Tilt to play';
             }
         });
 
