@@ -170,11 +170,11 @@
         // Ultra-smooth interpolation
         let currentTime = 0;
         let targetTime = 0;
-        const SMOOTHING = 0.15; // 0.2-0.4 for butter smooth (higher = more responsive)
+        const SMOOTHING = 0.12; // 0.2-0.4 for butter smooth (higher = more responsive)
         
         // Gyro smoothing with multiple samples
         let gyroBuffer = [];
-        const GYRO_BUFFER_SIZE = 5; // Average more samples for ultra-smooth input
+        const GYRO_BUFFER_SIZE = 8; // Average more samples for ultra-smooth input
         
         // High-frequency update loop
         let lastFrameTime = 0;
