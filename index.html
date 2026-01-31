@@ -1,44 +1,298 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Gyro Video Control</title>
-  <style>
-    html, body {
-      margin: 0;
-      height: 100%;
-      background: black;
-      overflow: hidden;
-    }
-    canvas {
-      display: block;
-      width: 100vw;
-      height: 100vh;
-    }
-    #startBtn {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      padding: 16px 32px;
-      font-size: 18px;
-      color: white;
-      background: rgba(255,255,255,0.2);
-      border: 1px solid white;
-      border-radius: 6px;
-      cursor: pointer;
-      z-index: 1000;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gyroscopic Video Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        #videoContainer {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #parallaxVideo {
+            max-width: 100%;
+            max-height: 100%;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 20px;
+            border-radius: 12px;
+            color: white;
+            text-align: center;
+            z-index: 100;
+            min-width: 280px;
+        }
+
+        #startButton {
+            background: #007AFF;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-bottom: 10px;
+            width: 100%;
+        }
+
+        #startButton:active {
+            background: #0051D5;
+        }
+
+        #startButton:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        .info {
+            font-size: 12px;
+            margin-top: 8px;
+            opacity: 0.8;
+        }
+
+        .debug {
+            font-size: 11px;
+            margin-top: 5px;
+            font-family: monospace;
+            color: #4CAF50;
+        }
+
+        #errorMessage {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(244, 67, 54, 0.9);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            display: none;
+            max-width: 90%;
+            text-align: center;
+            z-index: 101;
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            z-index: 99;
+        }
+
+        .progressBar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .progressFill {
+            height: 100%;
+            background: #007AFF;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+    </style>
 </head>
 <body>
+    <div id="errorMessage"></div>
+    <div class="loading" id="loadingText">Loading video...</div>
 
-<canvas id="c"></canvas>
+    <div id="videoContainer">
+        <video id="parallaxVideo" muted playsinline preload="auto">
+            <source src="parallax.av1.mp4" type="video/mp4">
+            Your browser does not support the video tag.
+        </video>
+    </div>
 
-<video id="video" src="parallax.av1.mp4" muted playsinline preload="auto" style="display:none;"></video>
+    <div id="controls">
+        <button id="startButton">Enable Gyroscope</button>
+        <div class="info">Tilt your phone left/right to control the video</div>
+        <div class="progressBar">
+            <div class="progressFill" id="progressFill"></div>
+        </div>
+        <div class="debug" id="debugInfo">Waiting for gyro...</div>
+    </div>
 
-<button id="startBtn">Start</button>
+    <script>
+        const video = document.getElementById('parallaxVideo');
+        const startButton = document.getElementById('startButton');
+        const debugInfo = document.getElementById('debugInfo');
+        const errorMessage = document.getElementById('errorMessage');
+        const loadingText = document.getElementById('loadingText');
+        const progressFill = document.getElementById('progressFill');
 
-<script src="script.js"></script>
+        let gyroActive = false;
+        let videoDuration = 0;
+        let middleTime = 0;
+        let baseGamma = null; // Store initial tilt angle
+        
+        // Configurable sensitivity (degrees of tilt for full video range)
+        const TILT_RANGE = 45; // ±45 degrees from center
+
+        // Show error message
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            setTimeout(() => {
+                errorMessage.style.display = 'none';
+            }, 5000);
+        }
+
+        // Update progress bar
+        function updateProgress() {
+            if (videoDuration > 0) {
+                const progress = (video.currentTime / videoDuration) * 100;
+                progressFill.style.width = progress + '%';
+            }
+        }
+
+        // Video loaded
+        video.addEventListener('loadedmetadata', () => {
+            videoDuration = video.duration;
+            middleTime = videoDuration / 2;
+            video.currentTime = middleTime;
+            loadingText.style.display = 'none';
+            console.log('Video loaded. Duration:', videoDuration, 'Middle:', middleTime);
+        });
+
+        video.addEventListener('timeupdate', updateProgress);
+
+        // Handle gyroscope data
+        function handleOrientation(event) {
+            if (!gyroActive || videoDuration === 0) return;
+
+            // gamma is the left-to-right tilt in degrees (-90 to 90)
+            let gamma = event.gamma;
+
+            // Handle device orientation (some phones report differently)
+            if (gamma === null) {
+                debugInfo.textContent = 'Gyro data not available';
+                return;
+            }
+
+            // Set baseline on first reading
+            if (baseGamma === null) {
+                baseGamma = gamma;
+            }
+
+            // Calculate relative tilt from starting position
+            let relativeTilt = gamma - baseGamma;
+
+            // Clamp the tilt to our range
+            relativeTilt = Math.max(-TILT_RANGE, Math.min(TILT_RANGE, relativeTilt));
+
+            // Map tilt to video time
+            // -TILT_RANGE (left) -> 0 (start of video)
+            // 0 (center) -> middleTime
+            // +TILT_RANGE (right) -> videoDuration (end of video)
+            const normalizedTilt = (relativeTilt + TILT_RANGE) / (TILT_RANGE * 2); // 0 to 1
+            const targetTime = normalizedTilt * videoDuration;
+
+            // Update video position
+            video.currentTime = targetTime;
+
+            // Debug info
+            const direction = relativeTilt < -2 ? '←' : relativeTilt > 2 ? '→' : '•';
+            debugInfo.textContent = `${direction} Tilt: ${relativeTilt.toFixed(1)}° | Frame: ${targetTime.toFixed(2)}s / ${videoDuration.toFixed(2)}s`;
+        }
+
+        // Request gyroscope permission (iOS 13+)
+        async function requestGyroPermission() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && 
+                typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        return true;
+                    } else {
+                        showError('Gyroscope permission denied');
+                        return false;
+                    }
+                } catch (error) {
+                    showError('Error requesting gyroscope: ' + error.message);
+                    return false;
+                }
+            }
+            // No permission needed (Android, older iOS)
+            return true;
+        }
+
+        // Start gyroscope control
+        startButton.addEventListener('click', async () => {
+            if (videoDuration === 0) {
+                showError('Please wait for video to load');
+                return;
+            }
+
+            const permitted = await requestGyroPermission();
+            
+            if (permitted) {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+                gyroActive = true;
+                baseGamma = null; // Reset baseline
+                startButton.textContent = 'Gyroscope Active ✓';
+                startButton.disabled = true;
+                debugInfo.textContent = 'Move your phone left/right';
+                
+                // Reset to middle
+                video.currentTime = middleTime;
+            }
+        });
+
+        // Handle video errors
+        video.addEventListener('error', (e) => {
+            loadingText.style.display = 'none';
+            showError('Error loading video. Make sure parallax.av1.mp4 is in the same folder.');
+            console.error('Video error:', e);
+        });
+
+        // Prevent scrolling on mobile
+        document.body.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+
+        // Debug: Check if gyroscope is available
+        if (!window.DeviceOrientationEvent) {
+            showError('Gyroscope not supported on this device');
+        }
+    </script>
 </body>
 </html>
