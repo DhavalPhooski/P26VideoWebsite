@@ -21,6 +21,7 @@
             justify-content: center;
             align-items: center;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            touch-action: none;
         }
 
         #canvasContainer {
@@ -32,7 +33,7 @@
             align-items: center;
         }
 
-        #videoCanvas {
+        #canvas {
             max-width: 100%;
             max-height: 100%;
             background: #000;
@@ -67,6 +68,7 @@
             cursor: pointer;
             margin-bottom: 10px;
             width: 100%;
+            transition: background 0.2s;
         }
 
         #startButton:active {
@@ -79,16 +81,20 @@
         }
 
         .info {
-            font-size: 12px;
+            font-size: 13px;
             margin-top: 8px;
             opacity: 0.9;
+            line-height: 1.4;
         }
 
         .debug {
-            font-size: 11px;
-            margin-top: 5px;
+            font-size: 12px;
+            margin-top: 8px;
             font-family: monospace;
             color: #4CAF50;
+            padding: 8px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 4px;
         }
 
         #errorMessage {
@@ -114,92 +120,78 @@
             color: white;
             font-size: 18px;
             z-index: 99;
+            text-align: center;
         }
 
         .progressBar {
             width: 100%;
-            height: 4px;
+            height: 6px;
             background: rgba(255, 255, 255, 0.2);
-            border-radius: 2px;
+            border-radius: 3px;
             margin-top: 10px;
             overflow: hidden;
         }
 
         .progressFill {
             height: 100%;
-            background: #007AFF;
-            width: 50%;
-            transition: none;
+            background: linear-gradient(90deg, #007AFF, #00D4FF);
+            width: 0%;
+            transition: width 0.05s linear;
         }
 
-        .speedIndicator {
-            font-size: 20px;
-            margin-top: 8px;
-            font-weight: 600;
+        .status {
+            font-size: 11px;
+            margin-top: 5px;
+            opacity: 0.7;
         }
     </style>
 </head>
 <body>
     <div id="errorMessage"></div>
-    <div class="loading" id="loadingText">Loading video...</div>
+    <div class="loading" id="loadingText">Loading video...<br><span class="status">Please wait</span></div>
 
-    <div id="canvasContainer">
-        <canvas id="videoCanvas"></canvas>
-    </div>
-
-    <video id="hiddenVideo" muted playsinline preload="auto">
+    <video id="hiddenVideo" muted playsinline preload="auto" crossorigin="anonymous">
         <source src="parallax.av1.mp4" type="video/mp4">
     </video>
 
+    <div id="canvasContainer">
+        <canvas id="canvas"></canvas>
+    </div>
+
     <div id="controls">
-        <button id="startButton">Enable Gyroscope</button>
-        <div class="info">Tilt left ◄ rewind | Tilt right ► forward</div>
-        <div class="speedIndicator" id="speedIndicator">●</div>
+        <button id="startButton">TAP TO START</button>
+        <div class="info">Tilt phone left/right to control video</div>
         <div class="progressBar">
             <div class="progressFill" id="progressFill"></div>
         </div>
-        <div class="debug" id="debugInfo">Waiting for gyro...</div>
+        <div class="debug" id="debugInfo">Ready</div>
     </div>
 
     <script>
-        const canvas = document.getElementById('videoCanvas');
-        const ctx = canvas.getContext('2d');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
         const video = document.getElementById('hiddenVideo');
         const startButton = document.getElementById('startButton');
         const debugInfo = document.getElementById('debugInfo');
         const errorMessage = document.getElementById('errorMessage');
         const loadingText = document.getElementById('loadingText');
         const progressFill = document.getElementById('progressFill');
-        const speedIndicator = document.getElementById('speedIndicator');
 
         let gyroActive = false;
         let videoDuration = 0;
-        let middleTime = 0;
+        let videoReady = false;
         let baseGamma = null;
         
-        // Playback control
-        let currentTime = 0;
-        let playbackVelocity = 0;
+        // Current position in video (0 to 1)
+        let currentPosition = 0.5; // Start at middle
         
-        // Settings for 1-second video
-        const DEAD_ZONE = 2;        // Degrees before movement starts
-        const MAX_TILT = 25;        // Max tilt for max speed
-        const MAX_VELOCITY = 0.025; // Seconds to move per frame
+        // Gyro settings
+        const DEAD_ZONE = 2; // Small dead zone
+        const TILT_RANGE = 25; // ±25 degrees for full range
         
-        // Smoothing
-        let tiltBuffer = [];
-        const TILT_BUFFER_SIZE = 3;
-        let isRunning = false;
-
-        // Setup canvas size
-        function resizeCanvas() {
-            const container = document.getElementById('canvasContainer');
-            canvas.width = container.clientWidth;
-            canvas.height = container.clientHeight;
-        }
-        
-        resizeCanvas();
-        window.addEventListener('resize', resizeCanvas);
+        // Animation
+        let animationId = null;
+        let lastRenderTime = 0;
 
         // Show error
         function showError(message) {
@@ -210,129 +202,117 @@
             }, 5000);
         }
 
-        // Update speed indicator
-        function updateSpeedIndicator(tilt) {
-            if (Math.abs(tilt) < DEAD_ZONE) {
-                speedIndicator.textContent = '●';
-                speedIndicator.style.color = '#888';
-            } else if (tilt < 0) {
-                const speed = Math.abs(tilt) / MAX_TILT;
-                if (speed < 0.3) speedIndicator.textContent = '◄';
-                else if (speed < 0.7) speedIndicator.textContent = '◄◄';
-                else speedIndicator.textContent = '◄◄◄';
-                speedIndicator.style.color = '#FF6B6B';
-            } else {
-                const speed = tilt / MAX_TILT;
-                if (speed < 0.3) speedIndicator.textContent = '►';
-                else if (speed < 0.7) speedIndicator.textContent = '►►';
-                else speedIndicator.textContent = '►►►';
-                speedIndicator.style.color = '#4CAF50';
-            }
-        }
-
-        // Draw video frame to canvas
-        function drawFrame() {
-            if (video.readyState >= 2) {
-                // Calculate aspect ratio fit
+        // Setup canvas size
+        function setupCanvas() {
+            const container = document.getElementById('canvasContainer');
+            const rect = container.getBoundingClientRect();
+            
+            if (video.videoWidth && video.videoHeight) {
                 const videoAspect = video.videoWidth / video.videoHeight;
-                const canvasAspect = canvas.width / canvas.height;
+                const containerAspect = rect.width / rect.height;
                 
-                let drawWidth, drawHeight, offsetX, offsetY;
-                
-                if (videoAspect > canvasAspect) {
-                    drawWidth = canvas.width;
-                    drawHeight = canvas.width / videoAspect;
-                    offsetX = 0;
-                    offsetY = (canvas.height - drawHeight) / 2;
+                if (containerAspect > videoAspect) {
+                    canvas.height = rect.height;
+                    canvas.width = rect.height * videoAspect;
                 } else {
-                    drawHeight = canvas.height;
-                    drawWidth = canvas.height * videoAspect;
-                    offsetX = (canvas.width - drawWidth) / 2;
-                    offsetY = 0;
+                    canvas.width = rect.width;
+                    canvas.height = rect.width / videoAspect;
                 }
-                
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+            } else {
+                canvas.width = rect.width;
+                canvas.height = rect.height;
             }
         }
 
-        // Main animation loop
+        // Draw current frame
+        function drawFrame() {
+            if (!videoReady) return;
+            
+            const now = performance.now();
+            if (now - lastRenderTime < 8) return; // ~120fps max
+            lastRenderTime = now;
+
+            // Set video to current position
+            const targetTime = currentPosition * videoDuration;
+            video.currentTime = targetTime;
+
+            // Draw to canvas
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Update progress
+            progressFill.style.width = (currentPosition * 100) + '%';
+        }
+
+        // Animation loop
         function animate() {
-            if (!isRunning) return;
-
-            // Update time based on velocity
-            currentTime += playbackVelocity;
-
-            // Clamp to video bounds
-            if (currentTime < 0) currentTime = 0;
-            if (currentTime > videoDuration) currentTime = videoDuration;
-
-            // Update video time and draw
-            video.currentTime = currentTime;
+            if (!gyroActive) return;
             drawFrame();
-
-            // Update progress bar
-            const progress = (currentTime / videoDuration) * 100;
-            progressFill.style.width = progress + '%';
-
-            requestAnimationFrame(animate);
+            animationId = requestAnimationFrame(animate);
         }
 
         // Video loaded
-        video.addEventListener('loadedmetadata', () => {
+        video.addEventListener('loadedmetadata', async () => {
             videoDuration = video.duration;
-            middleTime = videoDuration / 2;
-            currentTime = middleTime;
-            video.currentTime = middleTime;
+            console.log('Video loaded! Duration:', videoDuration);
             
-            loadingText.style.display = 'none';
-            console.log('Video loaded:', videoDuration + 's');
-        });
-
-        // Draw initial frame when ready
-        video.addEventListener('seeked', () => {
+            // Wait for video to be seekable
+            video.currentTime = videoDuration / 2;
+            
+            await new Promise(resolve => {
+                video.addEventListener('seeked', resolve, { once: true });
+            });
+            
+            setupCanvas();
             drawFrame();
+            videoReady = true;
+            loadingText.style.display = 'none';
+            
+            debugInfo.textContent = `Video ready: ${(videoDuration * 1000).toFixed(0)}ms`;
         });
 
         // Handle gyroscope
         function handleOrientation(event) {
-            if (!gyroActive || videoDuration === 0) return;
+            if (!gyroActive || !videoReady) return;
 
-            let gamma = event.gamma;
-            if (gamma === null) return;
-
-            // Set baseline
-            if (baseGamma === null) {
-                baseGamma = gamma;
-                tiltBuffer = Array(TILT_BUFFER_SIZE).fill(0);
+            let gamma = event.gamma; // Left-right tilt
+            
+            if (gamma === null || gamma === undefined) {
+                debugInfo.textContent = 'ERROR: No gyro data!';
+                return;
             }
 
-            // Calculate tilt
+            // Set baseline on first read
+            if (baseGamma === null) {
+                baseGamma = gamma;
+                debugInfo.textContent = `Baseline set: ${gamma.toFixed(1)}°`;
+                return;
+            }
+
+            // Calculate tilt from baseline
             let tilt = gamma - baseGamma;
 
-            // Smooth tilt
-            tiltBuffer.push(tilt);
-            tiltBuffer.shift();
-            const smoothTilt = tiltBuffer.reduce((a, b) => a + b, 0) / TILT_BUFFER_SIZE;
-
             // Apply dead zone
-            let effectiveTilt = Math.abs(smoothTilt) > DEAD_ZONE ? smoothTilt : 0;
+            if (Math.abs(tilt) < DEAD_ZONE) {
+                tilt = 0;
+            }
 
-            // Calculate velocity
-            const normalizedTilt = Math.max(-MAX_TILT, Math.min(MAX_TILT, effectiveTilt)) / MAX_TILT;
-            playbackVelocity = normalizedTilt * MAX_VELOCITY;
+            // Clamp to range
+            tilt = Math.max(-TILT_RANGE, Math.min(TILT_RANGE, tilt));
 
-            // Update UI
-            updateSpeedIndicator(smoothTilt);
+            // Map tilt to position (0 to 1)
+            // -TILT_RANGE = 0 (start), 0 = 0.5 (middle), +TILT_RANGE = 1 (end)
+            currentPosition = (tilt + TILT_RANGE) / (TILT_RANGE * 2);
+            currentPosition = Math.max(0, Math.min(1, currentPosition));
 
-            // Debug
-            const ms = Math.round(currentTime * 1000);
+            // Debug display
+            const currentMs = Math.round(currentPosition * videoDuration * 1000);
             const totalMs = Math.round(videoDuration * 1000);
-            const vel = (playbackVelocity * 1000).toFixed(1);
-            debugInfo.textContent = `Tilt: ${smoothTilt.toFixed(1)}° | Vel: ${vel}ms/f | ${ms}/${totalMs}ms`;
+            const arrow = tilt < -1 ? '◄◄' : tilt > 1 ? '►►' : '●';
+            
+            debugInfo.textContent = `${arrow} Tilt: ${tilt.toFixed(1)}° | ${currentMs}ms / ${totalMs}ms`;
         }
 
-        // Request permission
+        // Request gyroscope permission
         async function requestGyroPermission() {
             if (typeof DeviceOrientationEvent !== 'undefined' && 
                 typeof DeviceOrientationEvent.requestPermission === 'function') {
@@ -340,70 +320,85 @@
                     const permission = await DeviceOrientationEvent.requestPermission();
                     return permission === 'granted';
                 } catch (error) {
-                    showError('Permission error: ' + error.message);
+                    showError('Gyro permission error: ' + error.message);
                     return false;
                 }
             }
-            return true;
+            return true; // Android doesn't need permission
         }
 
-        // Start
+        // Start button
         startButton.addEventListener('click', async () => {
-            if (videoDuration === 0) {
-                showError('Wait for video to load');
+            if (!videoReady) {
+                showError('Video still loading...');
                 return;
+            }
+
+            // Try to play video first (required on mobile)
+            try {
+                await video.play();
+                video.pause();
+            } catch (e) {
+                console.log('Play attempt:', e);
             }
 
             const permitted = await requestGyroPermission();
             
             if (permitted) {
-                // Preload video
-                video.play().then(() => {
-                    setTimeout(() => {
-                        video.pause();
-                        video.currentTime = middleTime;
-                        currentTime = middleTime;
-                        drawFrame();
-                    }, 100);
-                }).catch(() => {
-                    video.currentTime = middleTime;
-                    currentTime = middleTime;
-                    drawFrame();
-                });
-
                 // Start gyro
-                window.addEventListener('deviceorientation', handleOrientation);
+                window.addEventListener('deviceorientation', handleOrientation, true);
                 
                 gyroActive = true;
                 baseGamma = null;
-                playbackVelocity = 0;
+                currentPosition = 0.5;
                 
-                // Start animation loop
-                isRunning = true;
-                requestAnimationFrame(animate);
+                // Start animation
+                animate();
                 
-                startButton.textContent = 'Active ✓';
+                startButton.textContent = 'GYRO ACTIVE ✓';
                 startButton.disabled = true;
-                debugInfo.textContent = 'Tilt your phone';
+                debugInfo.textContent = 'Tilt your phone!';
+                
+                console.log('Gyroscope activated!');
+            } else {
+                showError('Gyroscope permission denied!');
             }
         });
 
         // Handle errors
         video.addEventListener('error', (e) => {
             loadingText.style.display = 'none';
-            showError('Video load failed');
+            showError('Video failed to load! Check file name.');
             console.error('Video error:', e);
         });
 
-        // Prevent scrolling
+        // Prevent default touch behavior
         document.body.addEventListener('touchmove', (e) => {
             e.preventDefault();
         }, { passive: false });
 
+        document.body.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+        }, { passive: false });
+
+        // Resize handler
+        window.addEventListener('resize', () => {
+            if (videoReady) {
+                setupCanvas();
+                drawFrame();
+            }
+        });
+
         // Check support
         if (!window.DeviceOrientationEvent) {
-            showError('Gyroscope not supported');
+            showError('Device does not support gyroscope!');
+            debugInfo.textContent = 'Gyroscope NOT supported!';
+        } else {
+            debugInfo.textContent = 'Gyroscope available ✓';
         }
+
+        // Force video load
+        video.load();
     </script>
 </body>
 </html>
