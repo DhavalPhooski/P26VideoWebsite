@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Canvas Parallax Video</title>
+  <meta charset="UTF-8">
+  <title>Gyro Video Control</title>
   <style>
     html, body {
       margin: 0;
@@ -10,17 +10,11 @@
       background: black;
       overflow: hidden;
     }
-
     canvas {
       display: block;
       width: 100vw;
       height: 100vh;
     }
-
-    video {
-      display: none;
-    }
-
     #startBtn {
       position: absolute;
       top: 50%;
@@ -28,8 +22,8 @@
       transform: translate(-50%, -50%);
       padding: 16px 32px;
       font-size: 18px;
-      background: rgba(255,255,255,0.3);
       color: white;
+      background: rgba(255,255,255,0.2);
       border: 1px solid white;
       border-radius: 6px;
       cursor: pointer;
@@ -41,15 +35,9 @@
 
 <canvas id="c"></canvas>
 
-<video
-  id="video"
-  src="parallax.av1.mp4"
-  muted
-  playsinline
-  preload="auto">
-</video>
+<video id="video" src="parallax.av1.mp4" muted playsinline preload="auto" style="display:none;"></video>
 
-<button id="startBtn">Start Experience</button>
+<button id="startBtn">Start</button>
 
 <script src="script.js"></script>
 </body>
