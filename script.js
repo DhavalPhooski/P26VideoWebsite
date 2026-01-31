@@ -81,9 +81,16 @@ function draw() {
   gyroX += (targetGyro - gyroX) * 0.08;
 
   // Blend input
-  const blendedX = gyroEnabled ? 0.5 + gyroX * 0.8 : inputX;
+  let blendedX;
+  if (gyroEnabled) {
+    // Map gyroX (-0.5 → +0.5) to 0 → 1
+    blendedX = 0.5 + gyroX; // now -0.5 → 0, 0 → 0.5, +0.5 → 1
+    blendedX = Math.max(0, Math.min(1, blendedX)); // clamp
+  } else {
+    blendedX = inputX; // mouse/touch fallback
+  }
 
-  // Quantized time
+  // --- Map to quantized video time ---
   const q = Math.round(blendedX * STEPS) / STEPS;
   targetTime = q * video.duration;
 
@@ -95,10 +102,11 @@ function draw() {
   // Clear canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Micro parallax shift
+  // Micro parallax shift (optional)
   const maxShift = 50 * DPR;
   const shiftX = (blendedX - 0.5) * maxShift;
   ctx.drawImage(video, shiftX, 0, canvas.width, canvas.height);
 
   requestAnimationFrame(draw);
 }
+
